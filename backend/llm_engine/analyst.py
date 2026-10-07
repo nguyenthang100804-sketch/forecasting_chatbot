@@ -49,7 +49,7 @@ def generate_analysis(intent_data: dict, forecast_results: dict) -> str:
     
     # 3. Gọi LLM sinh văn bản (NLG)
     response = client.models.generate_content(
-        model='gemini-3-flash-preview',
+        model='gemini-3.5-flash',
         contents=prompt
     )
     
