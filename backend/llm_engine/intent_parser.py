@@ -23,7 +23,7 @@ def create_intent_chat_session():
     
     # Khởi tạo một phiên Chat có trí nhớ
     chat = client.chats.create(
-        model='gemini-3-flash-preview',
+        model='gemini-3.5-flash',
         config=types.GenerateContentConfig(
             # Chuyển Prompt tĩnh vào System Instruction
             system_instruction=f"Bạn là hệ thống phân tích ý định. Hôm nay là ngày {today_str}. Chỉ được phép phân tích câu hỏi và trả về JSON theo yêu cầu, không giải thích gì thêm.",
