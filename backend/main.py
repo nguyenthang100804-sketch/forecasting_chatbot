@@ -14,8 +14,8 @@ app: FastAPI = FastAPI(title="Revenue Prediction Agent API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"], 
-    allow_credentials=True,
+    allow_origins=["*"], # Cho phép Frontend từ Vercel gọi API
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -29,7 +29,8 @@ chat_sessions = {}
 @app.on_event("startup")
 async def load_models():
     print("Đang nạp mô hình LightGBM vào RAM...")
-    model_dir = "C:/Research Dataset/forecast-chatbot/backend/models"
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    model_dir = os.path.join(BASE_DIR, "models")
     try:
         models['rev_p1'] = lgb.Booster(model_file=os.path.join(model_dir, 'model_rev_phase1.txt'))
         models['rev_p2'] = lgb.Booster(model_file=os.path.join(model_dir, 'model_rev_phase2.txt'))
