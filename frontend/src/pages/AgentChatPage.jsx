@@ -4,13 +4,39 @@ import ChatMessage from '../components/ChatMessage';
 import { Send, Loader2, BarChart3 } from 'lucide-react';
 
 const AgentChatPage = () => {
-  const { messages, isLoading, sendMessage, messagesEndRef } = useChat();
+  const { messages, isLoading, error, sendMessage, messagesEndRef } = useChat();
   const [inputText, setInputText] = useState('');
+  const inputRef = React.useRef(null);
+  const predictionPrompt = 'Hãy dự đoán doanh thu cho ngày ';
 
-  const handleSend = (e) => {
+  const handleSend = async (e) => {
     e.preventDefault();
-    sendMessage(inputText);
+    const submittedText = inputText.trim();
+    if (!submittedText || isLoading) return;
+
     setInputText('');
+
+    try {
+      await sendMessage(submittedText);
+    } catch {
+      setInputText(submittedText);
+    }
+  };
+
+  const preparePredictionPrompt = () => {
+    setInputText(predictionPrompt);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const handleQuickAction = async (action) => {
+    if (action === 'start-prediction' || action === 'new-prediction') {
+      preparePredictionPrompt();
+      return;
+    }
+
+    if (action === 'explain') {
+      await sendMessage('Giải thích kết quả dự đoán vừa rồi');
+    }
   };
 
   return (
@@ -38,7 +64,12 @@ const AgentChatPage = () => {
         {/* Message List */}
         <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
           {messages.map((msg) => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage
+              key={msg.id}
+              message={msg}
+              onQuickAction={handleQuickAction}
+              isLoading={isLoading}
+            />
           ))}
           
           {isLoading && (
@@ -54,6 +85,7 @@ const AgentChatPage = () => {
         <div className="p-4 bg-white border-t border-gray-200">
           <form onSubmit={handleSend} className="relative flex items-center">
             <input
+              ref={inputRef}
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -69,6 +101,11 @@ const AgentChatPage = () => {
               <Send size={18} />
             </button>
           </form>
+          {error && (
+            <p role="alert" className="mt-2 px-3 text-sm text-red-600">
+              {error}
+            </p>
+          )}
         </div>
 
       </div>
