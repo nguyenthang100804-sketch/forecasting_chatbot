@@ -21,7 +21,7 @@ POST /api/copilotkit
 LangGraphAGUIAgent
         |
         v
-    supervisor_graph
+    supervisor
         |
         v
     agent_process
@@ -77,7 +77,7 @@ backend/
 │   ├── feature_generator.py
 │   └── explainer.py
 └── scripts/
-    └── generate_feature_store.py
+    └── generate_feature_store.py   # Script tạo calendar_features.parquet
 ```
 
 `intent_node.py`, `fallback_node` và `nlg_node.py` đã được loại bỏ khỏi flow.
