@@ -61,6 +61,39 @@ def _forecast_marker(forecast: dict) -> str:
     return f"\n\n<!--FORECAST_DATA:{json.dumps(forecast, ensure_ascii=False, separators=(',', ':'))}-->"
 
 
+def _format_forecast_context(forecast: dict) -> str:
+    """Format the latest forecast as readable context for the language model."""
+    results = forecast["forecast_results"]
+
+    def format_money(value: object) -> str:
+        return f"{float(value):,.0f} VND"
+
+    def format_factors(items: list[dict]) -> str:
+        if not items:
+            return "không có dữ liệu nổi bật"
+        return "; ".join(
+            f"{item['feature']} ({format_money(item['impact'])})" for item in items
+        )
+
+    revenue = results["revenue"]
+    cogs = results["cogs"]
+    return "\n".join(
+        [
+            f"Ngày dự báo: {forecast['target_date']}.",
+            f"Giảm giá theo phần trăm: {forecast['discount_pct']}%.",
+            f"Giảm giá cố định: {format_money(forecast['fixed_discount'])}.",
+            f"Doanh thu dự kiến: {format_money(revenue['prediction'])}.",
+            f"Mức nền doanh thu: {format_money(revenue['base_value'])}.",
+            f"Yếu tố làm tăng doanh thu: {format_factors(revenue['top_drivers'])}.",
+            f"Yếu tố làm giảm doanh thu: {format_factors(revenue['top_barriers'])}.",
+            f"COGS dự kiến: {format_money(cogs['prediction'])}.",
+            f"Mức nền COGS: {format_money(cogs['base_value'])}.",
+            f"Yếu tố làm tăng COGS: {format_factors(cogs['top_drivers'])}.",
+            f"Yếu tố làm giảm COGS: {format_factors(cogs['top_barriers'])}.",
+        ]
+    )
+
+
 def _is_forecast_related(text: str) -> bool:
     return any(word in text for word in EXPLANATION_WORDS + PREDICTION_WORDS)
 
@@ -79,7 +112,7 @@ def agent_process(state: ForecastState):
                 content=SYSTEM_PROMPT
                 + (
                     "\nKết quả dự báo gần nhất (chỉ dùng khi giải thích, không dự đoán lại):\n"
-                    + json.dumps(state["last_forecast"], ensure_ascii=False)
+                    + _format_forecast_context(state["last_forecast"])
                     if state.get("last_forecast")
                     else "\nChưa có kết quả dự báo nào trong conversation này.\n"
                 )

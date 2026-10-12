@@ -326,6 +326,11 @@ cập nhật:
 Prediction ngày mới sẽ ghi đè `last_forecast`; vì vậy “giải thích kết quả vừa
 rồi” luôn giải thích dự báo mới nhất.
 
+Khi gọi lại agent, `last_forecast` vẫn được giữ dưới dạng dữ liệu có cấu trúc
+trong state nhưng được format thành bản tóm tắt tiếng Việt dễ đọc trước khi
+đưa vào prompt Gemini. JSON chỉ tiếp tục được dùng cho `ToolMessage` và marker
+`FORECAST_DATA` để frontend có thể parse dữ liệu biểu đồ.
+
 Graph dùng:
 
 ```python
