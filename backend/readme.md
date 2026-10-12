@@ -1,101 +1,107 @@
 # Backend Forecast Chatbot
 
-Tài liệu này mô tả cách backend của Forecast Chatbot tiếp nhận câu hỏi, phân tích ý định, tạo feature, chạy mô hình dự báo doanh thu/COGS, sinh phần giải thích và trả kết quả cho frontend.
+Backend dùng FastAPI, CopilotKit/AG-UI và LangGraph để xây dựng một agent có
+khả năng:
 
-## 1. Tổng quan kiến trúc
+- Trả lời các câu hỏi thông thường bằng Gemini.
+- Chỉ gọi tool dự báo khi người dùng thực sự yêu cầu dự báo.
+- Hỏi lại ngày nếu yêu cầu dự báo chưa có ngày cụ thể.
+- Lưu kết quả dự báo gần nhất trong conversation state.
+- Giải thích kết quả gần nhất mà không chạy lại prediction.
 
-Backend được xây dựng trên các thành phần chính:
+## 1. Kiến trúc runtime
 
-- **FastAPI**: cung cấp HTTP API.
-- **AG-UI LangGraph**: chuyển LangGraph thành agent tương thích với CopilotKit.
-- **LangGraph**: điều phối pipeline xử lý hội thoại.
-- **LightGBM**: dự báo doanh thu và COGS.
-- **SHAP prediction contributions**: tính các yếu tố tác động tích cực/tiêu cực đến dự báo.
-- **Google Gemini**: chỉ dùng để sinh phần giải thích ngôn ngữ tự nhiên khi người dùng yêu cầu.
-- **Parquet feature store**: lưu các feature lịch, ngày lễ và promotion mặc định.
+```text
+Frontend/CopilotKit
+        |
+        v
+POST /api/copilotkit
+        |
+        v
+LangGraphAGUIAgent
+        |
+        v
+    supervisor_graph
+        |
+        v
+    agent_process
+      /       \
+     /         \ có tool_call
+    v           v
+   END      ToolNode
+                 |
+                 v
+       predict_revenue
+                 |
+                 v
+          forecast_graph
+           /         \
+          v           v
+   feature_node -> ml_node -> END
+```
 
-Backend không có endpoint `/api/chat` riêng. Frontend gửi message qua endpoint AG-UI:
+Supervisor là điểm vào của AG-UI. Agent tự quyết định:
+
+| Loại message | Hành động |
+|---|---|
+| Câu hỏi thông thường | Trả lời trực tiếp, không chạy ML |
+| Yêu cầu dự báo có ngày | Gọi `predict_revenue` |
+| Yêu cầu dự báo thiếu ngày | Hỏi lại ngày, không gọi tool |
+| Giải thích sau dự báo | Đọc `last_forecast`, không gọi lại tool |
+| Dự đoán ngày khác | Gọi lại `predict_revenue` với ngày mới |
+
+## 2. Cấu trúc file
+
+```text
+backend/
+├── main.py                    # FastAPI và AG-UI endpoint
+├── graph.py                   # Forecast Graph: feature -> ML
+├── supervisor.py              # Agent giám sát và vòng tool-call
+├── agent_tools.py             # Tool predict_revenue
+├── save_forecast_function.py      # Lưu tool result vào state
+├── requirements.txt
+├── render.yaml
+├── calendar_features.parquet  # Feature store theo ngày
+├── models/
+│   ├── model_rev_phase1.txt
+│   ├── model_rev_phase2.txt
+│   ├── model_rev_shape_13_19.txt
+│   ├── model_cogs_phase1.txt
+│   ├── model_cogs_phase2.txt
+│   └── cogs_model_shape_13_19.txt
+├── nodes/
+│   ├── state.py               # ForecastState
+│   ├── feature_node.py        # Tra cứu/chuẩn hóa feature
+│   └── ml_node.py             # LightGBM + SHAP
+├── ml_engine/
+│   ├── feature_generator.py
+│   └── explainer.py
+└── scripts/
+    └── generate_feature_store.py
+```
+
+`intent_node.py`, `fallback_node` và `nlg_node.py` đã được loại bỏ khỏi flow.
+Việc quyết định intent và sinh câu trả lời hiện thuộc về Agent trong
+`supervisor.py`. `graph.py` chỉ chạy workflow dự báo.
+
+## 3. API entry point
+
+Trong [main.py](./main.py), backend tạo `LangGraphAGUIAgent` từ
+`supervisor_graph` và đăng ký:
 
 ```text
 POST /api/copilotkit
 ```
 
-Endpoint này được đăng ký trong [main.py](./main.py).
+Frontend không gọi endpoint dự đoán riêng. Mọi message đều đi qua agent.
 
-## 2. Cấu trúc thư mục
-
-```text
-backend/
-├── main.py                         # FastAPI app và AG-UI endpoint
-├── graph.py                        # LangGraph workflow
-├── requirements.txt                # Python dependencies
-├── render.yaml                     # Cấu hình deploy Render
-├── calendar_features.parquet       # Feature store theo ngày
-├── models/
-│   ├── model_rev_phase1.txt        # Model revenue giai đoạn 1
-│   ├── model_rev_phase2.txt        # Model revenue giai đoạn 2
-│   ├── model_cogs_phase1.txt       # Model COGS giai đoạn 1
-│   └── model_cogs_phase2.txt       # Model COGS giai đoạn 2
-├── nodes/
-│   ├── state.py                    # Schema state của LangGraph
-│   ├── intent_node.py              # Phân tích intent/ngày/khuyến mãi
-│   ├── feature_node.py             # Tra cứu và hoàn thiện feature
-│   ├── ml_node.py                  # Chạy LightGBM + SHAP
-│   └── nlg_node.py                 # Tạo câu trả lời
-├── ml_engine/
-│   ├── feature_generator.py        # Sinh feature calendar
-│   └── explainer.py                # Chuyển SHAP và chọn yếu tố ảnh hưởng
-└── scripts/
-    └── generate_feature_store.py   # Sinh calendar_features.parquet
-```
-
-## 3. Khởi động backend
-
-### 3.1. Cài dependencies
-
-Từ thư mục `backend`:
-
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-Trên Linux/macOS:
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3.2. Cấu hình biến môi trường
-
-Khi cần dùng Gemini để giải thích, khai báo:
+Endpoint kiểm tra:
 
 ```text
-GOOGLE_API_KEY=<your-google-api-key>
+GET /
 ```
 
-Không commit API key vào repository.
-
-Nếu chỉ chạy câu dự báo thông thường, backend có thể trả template tĩnh và không cần gọi Gemini. Câu hỏi giải thích cần Gemini; nếu Gemini lỗi hoặc quá tải, backend dùng fallback cục bộ.
-
-### 3.3. Chạy local
-
-Từ thư mục `backend`:
-
-```powershell
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Kiểm tra server:
-
-```text
-GET http://127.0.0.1:8000/
-```
-
-Response thành công:
+Response:
 
 ```json
 {
@@ -103,300 +109,362 @@ Response thành công:
 }
 ```
 
-Frontend thường proxy `/api/copilotkit` tới runtime đang chạy ở port được cấu hình trong `vite.config.js`.
+## 4. Agent giám sát
 
-## 4. Luồng xử lý một message
+File: [supervisor.py](./supervisor.py)
 
-Workflow được khai báo trong [graph.py](./graph.py):
+Agent dùng `ChatGoogleGenerativeAI` và bind tool:
 
-```text
-AG-UI/CopilotKit request
-          |
-          v
-    intent_node
-       /    \
- fallback   feature_node
-    |           |
-   END       ml_node
-                 |
-                 v
-              nlg_node
-                 |
-                 v
-                END
+```python
+model = ChatGoogleGenerativeAI(
+    model="gemini-3.5-flash",
+    temperature=0.2,
+)
+agent = model.bind_tools(TOOLS)
 ```
 
-### Bước 1: `intent_node`
+System prompt yêu cầu agent:
 
-File: [nodes/intent_node.py](./nodes/intent_node.py)
+- Không gọi prediction cho câu hỏi QA thông thường.
+- Chỉ gọi tool khi có yêu cầu dự báo.
+- Không gọi tool khi yêu cầu dự báo chưa có ngày.
+- Dùng `last_forecast` để giải thích.
+- Không dự đoán lại khi người dùng chỉ yêu cầu giải thích.
 
-Node này:
+Agent nhận toàn bộ `messages` trong thread cùng một system context. Khi có
+`last_forecast`, kết quả đó được đưa vào context để agent giải thích chính
+xác dự báo gần nhất.
 
-1. Lấy **HumanMessage cuối cùng** trong lịch sử, không lấy tool/action message.
-2. Nhận diện câu hỏi dự báo hay giao tiếp thông thường.
-3. Trích xuất:
-   - Ngày dự báo.
-   - Phần trăm giảm giá.
-   - Mức giảm tiền cố định.
-4. Hỗ trợ nhiều dạng ngày:
-   - `2026-12-25`
-   - `25/12/2026`
-   - `ngày 25 tháng 12 năm 2026`
-   - `ngày mai`, `tuần sau`, `tháng sau`
-5. Nếu câu hỏi là câu tiếp nối như “giải thích kết quả”, node sử dụng lại `target_date`, `discount_pct` và `fixed_discount` của state trước đó.
-6. Nếu không parse được bằng regex, node gọi Gemini structured output để làm fallback intent parsing.
+### Câu hỏi không liên quan
 
-Nếu thiếu ngày hoặc không phải câu hỏi dự báo, node đặt `clarification_needed`. `route_intent()` sẽ chuyển request sang `fallback_node`.
-
-### Bước 2: `fallback_node`
-
-Nếu thiếu dữ liệu cần thiết, backend trả câu hỏi yêu cầu người dùng bổ sung ngày. Nếu người dùng chỉ chào hỏi hoặc hỏi ngoài phạm vi, backend trả lời rằng hệ thống hỗ trợ dự báo doanh thu.
-
-Node này không chạy ML và không gọi Gemini.
-
-### Bước 3: `feature_node`
-
-File: [nodes/feature_node.py](./nodes/feature_node.py)
-
-Node đọc `calendar_features.parquet` và tra cứu theo `target_date`.
-
-Feature store đã chứa:
-
-- Feature ngày trong tuần/tháng/quý.
-- Fourier seasonality features.
-- Ngày lễ và các feature liên quan đến Tết.
-- Promotion mặc định theo lịch.
-
-Nếu người dùng nhập promotion, promotion người dùng nhập sẽ **override** promotion mặc định trong feature store:
-
-- Phần trăm: ví dụ `giảm 20%`.
-- Tiền cố định: ví dụ `giảm 50k`.
-- Có thể dùng cả hai.
-
-Sau đó node ép kiểu `promo_season` và `discount_type` về categorical categories đúng với lúc train LightGBM, đồng thời sắp xếp đúng thứ tự 27 feature model yêu cầu.
-
-Nếu ngày không tồn tại trong feature store, node phát sinh lỗi rõ ràng thay vì trả kết quả giả.
-
-### Bước 4: `ml_node`
-
-File: [nodes/ml_node.py](./nodes/ml_node.py)
-
-Khi module được import, bốn LightGBM Booster được nạp từ `models/`:
-
-| Mục tiêu | Phase 1 | Phase 2 |
-|---|---|---|
-| Doanh thu | `model_rev_phase1.txt` | `model_rev_phase2.txt` |
-| COGS | `model_cogs_phase1.txt` | `model_cogs_phase2.txt` |
-
-Node serialize feature thành JSON để dùng `lru_cache`. Cache có tối đa 100 bộ feature, giúp tránh chạy lại dự báo/SHAP cho cùng một input.
-
-Kết quả được tính bởi `run_inference_with_shap()`:
-
-1. Chạy prediction contribution của từng model.
-2. Chuyển giá trị từ không gian `log1p` về VND.
-3. Blend phase 1 và phase 2 với:
+Ví dụ:
 
 ```text
-alpha = 0.45
-prediction = 0.45 * phase1 + 0.55 * phase2
+COGS nghĩa là gì?
 ```
 
-4. Tách các yếu tố thành:
-   - `top_drivers`: tác động dương.
-   - `top_barriers`: tác động âm.
+Agent trả lời trực tiếp. Supervisor kết thúc; Forecast Graph không chạy.
 
-Output dạng khái quát:
+### Dự báo thiếu ngày
+
+Ví dụ:
+
+```text
+Hãy dự đoán doanh thu
+```
+
+Agent tự hỏi lại ngày. Vì chưa có `target_date`, agent không phát tool call.
+
+### Dự báo có ngày
+
+Ví dụ:
+
+```text
+Hãy dự đoán doanh thu cho ngày 10/09/2023, giảm 20%
+```
+
+Agent phát tool call tương đương:
 
 ```json
 {
-  "revenue": {
-    "prediction": 3378387.0,
-    "base_value": 3100000.0,
-    "top_drivers": [
-      {"feature": "dow", "impact": 527000.0}
-    ],
-    "top_barriers": [
-      {"feature": "fourier_year_cos_1", "impact": -611000.0}
-    ]
-  },
-  "cogs": {
-    "prediction": 2781056.0,
-    "base_value": 2400000.0,
-    "top_drivers": [],
-    "top_barriers": []
+  "name": "predict_revenue",
+  "arguments": {
+    "target_date": "2023-09-10",
+    "discount_pct": 20,
+    "fixed_discount": 0
   }
 }
 ```
 
-### Bước 5: `nlg_node`
+### Giải thích
 
-File: [nodes/nlg_node.py](./nodes/nlg_node.py)
-
-Node xác định loại yêu cầu dựa trên HumanMessage cuối cùng:
-
-#### Dự báo thông thường
-
-Nếu không có các từ khóa như `giải thích`, `tại sao`, `vì sao`, `chi tiết`, `phân tích`, backend không gọi LLM. Backend dùng template tĩnh có:
-
-- Doanh thu.
-- COGS.
-- Yếu tố thúc đẩy chính.
-- Yếu tố kéo giảm chính.
-
-#### Giải thích
-
-Nếu là yêu cầu giải thích, backend:
-
-1. Gửi prompt cùng số liệu revenue/COGS và các yếu tố SHAP tới Gemini.
-2. Chuẩn hóa response text hoặc content blocks từ Gemini bằng `extract_text_content()`.
-3. Gắn dữ liệu forecast vào response bằng marker nội bộ:
+Ví dụ:
 
 ```text
-<!--FORECAST_DATA:{...json...}-->
+Giải thích kết quả dự đoán vừa rồi
 ```
 
-Frontend dùng marker này để vẽ chart; marker được loại bỏ trước khi render nội dung chat.
+Nếu state có `last_forecast`, agent giải thích từ dữ liệu đó và không gọi
+`predict_revenue` lần nữa. Nếu chưa có dự báo, agent thông báo chưa có kết quả
+để giải thích và hỏi người dùng muốn dự đoán ngày nào.
 
-Biểu đồ **không gọi LLM riêng**. Chart dùng trực tiếp dữ liệu đã được tạo từ ML/SHAP.
+## 5. Tool `predict_revenue`
 
-#### Fallback khi Gemini lỗi
+File: [agent_tools.py](./agent_tools.py)
 
-Nếu Gemini lỗi, bao gồm lỗi `503 Service Unavailable`, hoặc trả nội dung rỗng:
+Tool nhận:
 
-- Backend ghi stack trace bằng logger.
-- Sinh phần giải thích ngắn bằng `build_explanation_fallback()`.
-- Vẫn đính kèm `FORECAST_DATA`.
+```python
+predict_revenue(
+    target_date: str,
+    discount_pct: float = 0.0,
+    fixed_discount: float = 0.0,
+)
+```
 
-Vì vậy lỗi Gemini không làm mất dữ liệu biểu đồ.
-
-## 5. State và memory hội thoại
-
-Schema state nằm trong [nodes/state.py](./nodes/state.py):
+Tool thực hiện:
 
 ```text
-messages
-target_date
-discount_pct
-fixed_discount
-clarification_needed
-is_prediction_query
-ml_features
-forecast_results
+Chuẩn hóa ngày
+    ↓
+graph.run_forecast() -> Forecast Graph (feature -> ML)
+    ↓
+ml_node.process() -> ensemble_engine
+    ↓
+Two-Period 0.5 + Shape 13-19 0.5
+    ↓
+SHAP theo 8 nhóm feature
+    ↓
+Trả structured JSON
 ```
 
-`messages` dùng `add_messages`, cho phép LangGraph nối lịch sử hội thoại.
+`ensemble_engine.py` nạp một lần bốn model Two-Period của project và hai model
+Shape trong `backend/models`. Hai bộ feature vẫn được giữ độc lập:
+`calendar_features.parquet` phục vụ Two-Period, còn
+`ml_engine/features_shape_13_19.py` tạo đúng 25 cột Shape theo thứ tự lúc
+huấn luyện. Kết quả cuối dùng công thức:
 
-Graph được compile với:
+```text
+TwoPeriod = 0.45 * expm1(P1) + 0.55 * expm1(P2)
+Shape = 0.8 * expm1(M2)
+Final = 0.5 * TwoPeriod + 0.5 * Shape
+```
+
+SHAP được tính trong không gian log cho từng model, đổi tên feature tương ứng,
+gộp thành các nhóm `Seasonality`, `Lunar calendar`, `Tet`, `Edge-of-month`,
+`Weekly`, `Promotion`, `Special day` và `Year-parity`, sau đó quy đổi ra tiền.
+Vì vậy `base_value + sum(contributions.money)` luôn bằng `prediction`, còn
+frontend vẽ `groups` thay vì danh sách SHAP cũ.
+
+Tool chấp nhận các dạng ngày:
+
+- `YYYY-MM-DD`
+- `DD/MM/YYYY`
+- `DD-MM-YYYY`
+
+Promotion âm bị từ chối. Promotion người dùng nhập sẽ override promotion mặc
+định trong `calendar_features.parquet`.
+
+Tool trả JSON dạng:
+
+```json
+{
+  "target_date": "2023-09-10",
+  "discount_pct": 20,
+  "fixed_discount": 0,
+  "forecast_results": {
+    "revenue": {
+      "prediction": 3378387.0,
+      "base_value": 3100000.0,
+      "top_drivers": [],
+      "top_barriers": []
+    },
+    "cogs": {
+      "prediction": 2781056.0,
+      "base_value": 2400000.0,
+      "top_drivers": [],
+      "top_barriers": []
+    }
+  }
+}
+```
+
+Tool chỉ trả dữ liệu, không tự gọi Gemini để viết câu trả lời.
+
+## 6. Forecast Graph và tool call
+
+File: [graph.py](./graph.py)
+
+`graph.py` không chứa Agent hoặc ToolNode. Nó chỉ chạy pipeline dự báo:
+
+```python
+builder.add_node("feature_node", build_features)
+builder.add_node("ml_node", run_ml)
+```
+
+Routing dựa trên `AIMessage.tool_calls`:
+
+```text
+supervisor.py
+    |
+    +-- QA/giải thích -------> trả lời trực tiếp
+    |
+    +-- yêu cầu dự báo ------> ToolNode
+                                  |
+                                  v
+                         agent_tools.predict_revenue
+                                  |
+                                  v
+                            graph.run_forecast
+                                  |
+                                  v
+                        feature_node -> ml_node
+```
+
+Supervisor quay lại `agent_process` sau ToolNode để Agent nhận ToolMessage và
+viết câu trả lời cuối cùng cho người dùng. Các câu QA thông thường chỉ chạy
+một lượt agent; Forecast Graph chỉ chạy khi tool được gọi.
+
+## 7. Lưu forecast vào memory
+
+File: [save_forecast_node.py](./save_forecast_node.py)
+
+Sau khi `ToolNode` thực thi tool, node này đọc `ToolMessage`, parse JSON và
+cập nhật:
+
+```python
+{
+    "last_forecast": payload,
+    "forecast_results": payload["forecast_results"],
+    "target_date": payload["target_date"],
+    "discount_pct": payload["discount_pct"],
+    "fixed_discount": payload["fixed_discount"],
+}
+```
+
+`last_forecast` là dữ liệu agent dùng cho yêu cầu giải thích tiếp theo.
+Prediction ngày mới sẽ ghi đè `last_forecast`; vì vậy “giải thích kết quả vừa
+rồi” luôn giải thích dự báo mới nhất.
+
+Graph dùng:
 
 ```python
 InMemorySaver()
 ```
 
-AG-UI sử dụng `thread_id` để tiếp tục cùng một conversation. Frontend hiện tạo một `thread_id` mới mỗi lần tải trang, nên F5 sẽ bắt đầu phiên mới. Trong cùng một lần mở trang, các câu hỏi tiếp theo vẫn dùng chung context.
+Frontend tạo `thread_id` mới khi reload trang. Do đó:
 
-`InMemorySaver` chỉ lưu trong process hiện tại:
+- Các message trong cùng một lần mở trang dùng chung memory.
+- F5 tạo conversation mới.
+- Restart backend làm mất memory.
+- Các process backend khác nhau không chia sẻ memory.
 
-- Restart backend sẽ mất memory.
-- Nhiều worker/process không chia sẻ memory.
-- Production nhiều instance nên thay bằng durable checkpointer như PostgreSQL hoặc Redis.
+Production nhiều instance nên thay bằng durable checkpointer như PostgreSQL
+hoặc Redis.
 
-## 6. Tạo lại feature store
+## 8. Prediction và SHAP
 
-Feature store được sinh bởi:
+### Feature
+
+File [nodes/feature_node.py](./nodes/feature_node.py) tra cứu
+`calendar_features.parquet`, xử lý promotion override và ép kiểu categorical
+đúng với model.
+
+### Model
+
+File [nodes/ml_node.py](./nodes/ml_node.py) nạp bốn LightGBM model:
+
+| Mục tiêu | Phase 1 | Phase 2 |
+|---|---|---|
+| Revenue | `model_rev_phase1.txt` | `model_rev_phase2.txt` |
+| COGS | `model_cogs_phase1.txt` | `model_cogs_phase2.txt` |
+
+Prediction được blend:
+
+```text
+0.45 * phase1 + 0.55 * phase2
+```
+
+`ml_node` cache tối đa 100 bộ feature để tránh tính lại cùng một forecast.
+SHAP contribution được xử lý trong [ml_engine/explainer.py](./ml_engine/explainer.py),
+bao gồm chuyển đổi từ không gian `log1p` về VND và chọn drivers/barriers.
+
+## 9. Chart data
+
+Agent node gắn dữ liệu forecast vào response cuối bằng marker:
+
+```text
+<!--FORECAST_DATA:{...json...}-->
+```
+
+Frontend parse marker để:
+
+1. Nhận biết kết quả forecast.
+2. Hiển thị nút `Dự đoán ngày khác`.
+3. Hiển thị nút `Giải thích kết quả dự đoán`.
+4. Vẽ chart khi response là kết quả giải thích.
+5. Xóa marker trước khi render text.
+
+Marker chỉ được thêm vào response cuối, không dùng frontend tool call để vẽ
+chart. Vì vậy chart không tạo thêm một vòng agent và không gây gọi LLM lặp.
+
+## 10. Chạy local
+
+Từ thư mục `backend`:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:GOOGLE_API_KEY="<your-google-api-key>"
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+export GOOGLE_API_KEY="<your-google-api-key>"
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+## 11. Tạo lại feature store
 
 ```powershell
 cd backend
 python scripts/generate_feature_store.py
 ```
 
-Script tạo dữ liệu mặc định từ `2023-01-01` đến `2030-12-31` và ghi vào:
+Script mặc định tạo feature từ `2023-01-01` đến `2030-12-31` trong:
 
 ```text
 backend/calendar_features.parquet
 ```
 
-Khi mở rộng phạm vi ngày, cần đảm bảo:
+Ngày ngoài phạm vi feature store sẽ làm tool báo lỗi thay vì trả kết quả giả.
 
-1. Feature store bao phủ ngày người dùng muốn dự báo.
-2. Các model vẫn tương thích với danh sách feature.
-3. Quy tắc promotion trong `get_expected_promo()` khớp với nghiệp vụ.
+## 12. Deploy Render
 
-## 7. Cấu hình deploy Render
-
-File [render.yaml](./render.yaml) cấu hình:
+`render.yaml` dùng:
 
 ```yaml
-runtime: python
 rootDir: backend
 buildCommand: pip install -r requirements.txt
 startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-Render cần biến môi trường:
+Cần cấu hình biến môi trường:
 
 ```text
 GOOGLE_API_KEY
 ```
 
-Port phải lấy từ `$PORT` do Render cấp, không hard-code port production.
+Không commit API key vào repository.
 
-## 8. Lỗi thường gặp và cách kiểm tra
-
-### Không tìm thấy feature store
-
-Log:
-
-```text
-WARNING: Không tìm thấy .../calendar_features.parquet
-```
-
-Khắc phục:
-
-```powershell
-cd backend
-python scripts/generate_feature_store.py
-```
-
-### Không nạp được model
-
-Kiểm tra bốn file model trong `backend/models/`. Nếu model không nạp được, `ml_node` sẽ không thể dự báo và cần dừng deployment để sửa cấu hình/file model, không nên trả fallback giả.
-
-### Gemini trả lỗi 503
-
-Đây là lỗi tạm thời do model quá tải hoặc quota. Dự báo ML vẫn có thể chạy; phần giải thích dùng fallback cục bộ và chart vẫn dựa trên `forecast_results`.
-
-### Ngày không có trong feature store
-
-Kiểm tra `target_date` đã nằm trong khoảng ngày được tạo bởi `generate_feature_store.py` chưa.
-
-### Kiểm tra nhanh syntax
+## 13. Kiểm tra nhanh
 
 ```powershell
 cd backend
 .\venv\Scripts\python.exe -m py_compile `
-  main.py graph.py `
-  nodes\intent_node.py `
-  nodes\feature_node.py `
-  nodes\ml_node.py `
-  nodes\nlg_node.py
+  main.py graph.py agent_tools.py `
+  save_forecast_function.py nodes\state.py `
+  nodes\feature_node.py nodes\ml_node.py
 ```
 
-## 9. Hợp đồng dữ liệu với frontend
+Chạy tool trực tiếp:
 
-Frontend nhận message text qua AG-UI/CopilotKit. Khi có marker `FORECAST_DATA`, frontend:
+```powershell
+.\venv\Scripts\python.exe -c "from agent_tools import predict_revenue; print(predict_revenue.invoke({'target_date': '2023-09-10'}))"
+```
 
-1. Parse JSON kết quả forecast.
-2. Xóa marker khỏi text hiển thị.
-3. Chỉ render chart khi đó là message giải thích.
-4. Hiển thị các quick action dựa trên message forecast mới nhất.
+## 14. Giới hạn hiện tại
 
-Backend không phát `tool_call` để vẽ chart. Cách này tránh làm runtime chạy thêm một lượt agent và tránh gọi LLM lặp lại.
-
-## 10. Các giới hạn hiện tại
-
-- Checkpoint đang dùng memory trong process, chưa bền vững khi restart.
-- CORS đang cho phép mọi origin (`allow_origins=["*"]`); production nên giới hạn theo domain frontend.
-- Model và feature store được load lúc import module; thay model cần restart process.
-- Cache ML là cache cục bộ từng process, không chia sẻ giữa các instance.
-- LLM chỉ được dùng cho intent fallback và giải thích; dự báo số liệu không phụ thuộc vào LLM.
-
+- Gemini vẫn là bộ não quyết định intent, nên chất lượng tool calling phụ
+  thuộc model và system prompt.
+- `InMemorySaver` không bền vững khi restart hoặc scale nhiều process.
+- CORS trong `main.py` đang cho phép mọi origin; production nên giới hạn theo
+  domain frontend.
+- Model và feature store được load lúc import module.
+- `GOOGLE_API_KEY` là bắt buộc để agent trả lời và quyết định tool.

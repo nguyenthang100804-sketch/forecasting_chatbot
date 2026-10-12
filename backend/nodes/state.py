@@ -16,3 +16,4 @@ class ForecastState(TypedDict):
     # Data truyền giữa các bước
     ml_features: Optional[dict]
     forecast_results: Optional[dict]
+    last_forecast: Optional[dict]

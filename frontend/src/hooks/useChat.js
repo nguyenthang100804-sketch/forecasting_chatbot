@@ -72,7 +72,8 @@ export const useChat = () => {
     if (!match) return null;
 
     try {
-      return JSON.parse(match[1]);
+      const payload = JSON.parse(match[1]);
+      return payload.forecast_results || payload;
     } catch (parseError) {
       console.error('Không thể đọc dữ liệu biểu đồ dự báo:', parseError);
       return null;

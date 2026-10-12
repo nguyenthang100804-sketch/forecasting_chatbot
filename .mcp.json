@@ -1,0 +1,11 @@
+{
+	"mcpServers": {
+		"CopilotKit MCP": {
+			"type": "sse",
+			"url": "https://mcp.copilotkit.ai/sse",
+			"tools": [
+				"*"
+			]
+		}
+	}
+}
