@@ -1,0 +1,54 @@
+sequenceDiagram
+    autonumber
+    actor User as Người dùng
+    participant UI as Frontend (AgentChatPage / useChat)
+    participant API as Backend FastAPI (/api/copilotkit)
+    participant Sup as Supervisor Graph (agent_node)
+    participant LLM as Gemini 3.5 Flash
+    participant Tools as ToolNode (predict_revenue)
+    participant FGraph as Forecast Graph (Deterministic)
+    participant Feat as Feature Node
+    participant Store as calendar_features.parquet
+    participant ML as ML Node (ensemble_engine)
+    participant Models as LightGBM Models (.txt)
+    participant SHAP as final_model_shap
+    participant Save as save_forecast_node (Memory)
+
+    %% 1. Tương tác bắt đầu
+    User->>UI: Gửi yêu cầu dự báo (ví dụ: "Dự đoán doanh thu ngày 2024-05-15")
+    UI->>API: POST /api/copilotkit (messages, threadId)
+    API->>Sup: Thực thi supervisor_graph.invoke()
+    Sup->>LLM: Gọi Gemini với SYSTEM_PROMPT + tools + context
+    LLM-->>Sup: Trả về ToolCall: predict_revenue(target_date="2024-05-15")
+
+    %% 2. Thực thi Tool
+    Sup->>Tools: Điều hướng qua conditional edge -> ToolNode
+    Tools->>FGraph: run_forecast(target_date, discount_pct, fixed_discount)
+    
+    %% 3. Forecast Graph nội bộ
+    FGraph->>Feat: feature_node.process(state)
+    Feat->>Store: Tra cứu O(1) calendar features
+    Store-->>Feat: 27 features (dow, month, fourier, promo...)
+    Feat-->>FGraph: Cập nhật ml_features vào state
+    
+    FGraph->>ML: ml_node.process(state)
+    ML->>Models: Nạp 6 model LightGBM (Revenue & COGS)
+    ML->>SHAP: explain_final (TwoPeriod + Shape + TreeSHAP)
+    SHAP-->>ML: Kết quả dự báo + Base value + Contributions
+    ML-->>FGraph: Cập nhật forecast_results vào state
+    FGraph-->>Tools: Trả về kết quả JSON forecast
+
+    %% 4. Lưu Forecast và sinh phản hồi tự nhiên
+    Tools->>Save: save_forecast_node.process()
+    Save-->>Sup: Cập nhật last_forecast vào conversation state
+    Sup->>LLM: Gọi agent_node lần 2 kèm kết quả tool
+    LLM-->>Sup: Trả về văn bản giải thích tự nhiên
+    Sup->>Sup: Gắn marker <!--FORECAST_DATA:{...}--> vào nội dung
+    Sup-->>API: Trả về AIMessage hoàn chỉnh
+    API-->>UI: Streaming/Response qua CopilotKit protocol
+
+    %% 5. Hiển thị UI
+    UI->>UI: useChat parse regex FORECAST_DATA
+    UI->>UI: ChatMessage render Markdown + Quick Actions
+    UI->>UI: ShapChart vẽ biểu đồ đóng góp tác động (Recharts)
+    UI-->>User: Hiển thị câu trả lời và biểu đồ SHAP trực quan

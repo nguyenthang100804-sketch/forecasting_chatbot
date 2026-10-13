@@ -4,6 +4,8 @@ This module owns only the prediction workflow. The conversational supervisor
 and its tools live in ``supervisor.py`` and ``agent_tools.py``.
 """
 
+from datetime import datetime
+
 from langgraph.graph import END, StateGraph
 
 from nodes.feature_node import process as build_features
@@ -22,7 +24,7 @@ forecast_graph = builder.compile()
 
 
 def run_forecast(
-    target_date: str,
+    target_date: datetime,
     discount_pct: float = 0.0,
     fixed_discount: float = 0.0,
 ) -> dict:
