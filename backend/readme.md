@@ -55,34 +55,37 @@ Supervisor là điểm vào của AG-UI. Agent tự quyết định:
 ```text
 backend/
 ├── main.py                    # FastAPI và AG-UI endpoint
-├── graph.py                   # Forecast Graph: feature -> ML
-├── supervisor.py              # Agent giám sát và vòng tool-call
-├── agent_tools.py             # Tool predict_revenue
-├── save_forecast_function.py      # Lưu tool result vào state
+├── agent/                     # Hội thoại, tool và state formatting
+│   ├── supervisor.py          # Agent giám sát và vòng tool-call
+│   ├── tools.py               # Tool predict_revenue
+│   ├── formatting.py          # Định dạng lịch sử/kết quả forecast
+│   ├── save_forecast.py       # Lưu tool result vào state
+│   └── types.py               # Kiểu dữ liệu forecast
+├── pipelines/                 # Các workflow LangGraph
+│   ├── forecast_graph.py      # Feature -> ML
+│   └── nodes/
+│       ├── state.py
+│       ├── feature_node.py
+│       └── ml_node.py
+├── ml_engine/                 # Feature engineering, model và SHAP
+│   ├── ensemble.py
+│   ├── feature_generator.py
+│   ├── features_shape_13_19.py
+│   ├── final_model_shap.py
+│   └── explainer.py
+├── data/                      # Feature store, promotion và model artifacts
+│   ├── calendar_features.parquet
+│   ├── promotions.csv
+│   └── models/
 ├── requirements.txt
 ├── render.yaml
-├── calendar_features.parquet  # Feature store theo ngày
-├── models/
-│   ├── model_rev_phase1.txt
-│   ├── model_rev_phase2.txt
-│   ├── model_rev_shape_13_19.txt
-│   ├── model_cogs_phase1.txt
-│   ├── model_cogs_phase2.txt
-│   └── cogs_model_shape_13_19.txt
-├── nodes/
-│   ├── state.py               # ForecastState
-│   ├── feature_node.py        # Tra cứu/chuẩn hóa feature
-│   └── ml_node.py             # LightGBM + SHAP
-├── ml_engine/
-│   ├── feature_generator.py
-│   └── explainer.py
 └── scripts/
     └── generate_feature_store.py   # Script tạo calendar_features.parquet
 ```
 
 `intent_node.py`, `fallback_node` và `nlg_node.py` đã được loại bỏ khỏi flow.
 Việc quyết định intent và sinh câu trả lời hiện thuộc về Agent trong
-`supervisor.py`. `graph.py` chỉ chạy workflow dự báo.
+`agent/supervisor.py`. `pipelines/forecast_graph.py` chỉ chạy workflow dự báo.
 
 ## 3. API entry point
 
@@ -94,6 +97,19 @@ POST /api/copilotkit
 ```
 
 Frontend không gọi endpoint dự đoán riêng. Mọi message đều đi qua agent.
+
+### Streaming phản hồi
+
+Endpoint AG-UI trả dữ liệu dưới dạng SSE. Trong `agent/supervisor.py`, agent dùng
+`model.stream(...)` thay vì `model.invoke(...)`; các `AIMessageChunk` được gửi
+qua AG-UI ngay khi Gemini tạo ra và sau đó được gom lại thành một
+`AIMessage` hoàn chỉnh để tiếp tục vòng tool-call.
+
+Frontend đã dùng CopilotKit nên tự động nhận các event này và cập nhật
+`useCopilotChatInternal().messages` theo từng chunk. Không cần tạo endpoint
+streaming riêng hoặc tự nối chuỗi ở React. Nếu dùng `fetch` trực tiếp thay vì
+CopilotKit, client phải đọc response SSE và xử lý các event
+`TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END`.
 
 Endpoint kiểm tra:
 
@@ -111,13 +127,13 @@ Response:
 
 ## 4. Agent giám sát
 
-File: [supervisor.py](./supervisor.py)
+File: [agent/supervisor.py](./agent/supervisor.py)
 
 Agent dùng `ChatGoogleGenerativeAI` và bind tool:
 
 ```python
 model = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
+    model="gemini-3.6-flash",
     temperature=0.2,
 )
 agent = model.bind_tools(TOOLS)
@@ -190,7 +206,7 @@ Nếu state có `last_forecast`, agent giải thích từ dữ liệu đó và k
 
 ## 5. Tool `predict_revenue`
 
-File: [agent_tools.py](./agent_tools.py)
+File: [agent/tools.py](./agent/tools.py)
 
 Tool nhận:
 
@@ -218,9 +234,9 @@ SHAP theo 8 nhóm feature
 Trả structured JSON
 ```
 
-`ensemble_engine.py` nạp một lần bốn model Two-Period của project và hai model
-Shape trong `backend/models`. Hai bộ feature vẫn được giữ độc lập:
-`calendar_features.parquet` phục vụ Two-Period, còn
+`ml_engine/ensemble.py` nạp một lần bốn model Two-Period của project và hai model
+Shape trong `data/models`. Hai bộ feature vẫn được giữ độc lập:
+`data/calendar_features.parquet` phục vụ Two-Period, còn
 `ml_engine/features_shape_13_19.py` tạo đúng 25 cột Shape theo thứ tự lúc
 huấn luyện. Kết quả cuối dùng công thức:
 
@@ -273,9 +289,10 @@ Tool chỉ trả dữ liệu, không tự gọi Gemini để viết câu trả l
 
 ## 6. Forecast Graph và tool call
 
-File: [graph.py](./graph.py)
+File: [pipelines/forecast_graph.py](./pipelines/forecast_graph.py)
 
-`graph.py` không chứa Agent hoặc ToolNode. Nó chỉ chạy pipeline dự báo:
+`pipelines/forecast_graph.py` không chứa Agent hoặc ToolNode. Nó chỉ chạy
+pipeline dự báo:
 
 ```python
 builder.add_node("feature_node", build_features)
@@ -351,13 +368,13 @@ hoặc Redis.
 
 ### Feature
 
-File [nodes/feature_node.py](./nodes/feature_node.py) tra cứu
-`calendar_features.parquet`, xử lý promotion override và ép kiểu categorical
+File [pipelines/nodes/feature_node.py](./pipelines/nodes/feature_node.py) tra cứu
+`data/calendar_features.parquet`, xử lý promotion override và ép kiểu categorical
 đúng với model.
 
 ### Model
 
-File [nodes/ml_node.py](./nodes/ml_node.py) nạp bốn LightGBM model:
+File [pipelines/nodes/ml_node.py](./pipelines/nodes/ml_node.py) nạp bốn LightGBM model:
 
 | Mục tiêu | Phase 1 | Phase 2 |
 |---|---|---|
@@ -453,15 +470,15 @@ Không commit API key vào repository.
 ```powershell
 cd backend
 .\venv\Scripts\python.exe -m py_compile `
-  main.py graph.py agent_tools.py `
-  save_forecast_function.py nodes\state.py `
-  nodes\feature_node.py nodes\ml_node.py
+  main.py agent\supervisor.py agent\tools.py `
+  pipelines\forecast_graph.py pipelines\nodes\state.py `
+  pipelines\nodes\feature_node.py pipelines\nodes\ml_node.py
 ```
 
 Chạy tool trực tiếp:
 
 ```powershell
-.\venv\Scripts\python.exe -c "from agent_tools import predict_revenue; print(predict_revenue.invoke({'target_date': '2023-09-10'}))"
+.\venv\Scripts\python.exe -c "from agent.tools import predict_revenue; print(predict_revenue.invoke({'target_date': '2023-09-10'}))"
 ```
 
 ## 14. Giới hạn hiện tại

@@ -5,12 +5,12 @@ from functools import lru_cache
 import lightgbm as lgb
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from ml_engine.features_shape_13_19 import build_features as build_shape_features
 from ml_engine.final_model_shap import explain_final
-from nodes.feature_node import DISCOUNT_TYPE_CATS, PROMO_SEASON_CATS
+from pipelines.nodes.feature_node import DISCOUNT_TYPE_CATS, PROMO_SEASON_CATS
 
-MODEL_DIR = os.path.join(BASE_DIR, "models")
+MODEL_DIR = os.path.join(BASE_DIR, "data", "models")
 
 MODELS = {
     "revenue": (

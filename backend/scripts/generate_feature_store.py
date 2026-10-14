@@ -82,5 +82,5 @@ def generate_store(start_date="2023-01-01", end_date="2030-12-31", output_path="
 
 if __name__ == "__main__":
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out_path = os.path.join(BASE_DIR, "calendar_features.parquet")
+    out_path = os.path.join(BASE_DIR, "data", "calendar_features.parquet")
     generate_store(output_path=out_path)

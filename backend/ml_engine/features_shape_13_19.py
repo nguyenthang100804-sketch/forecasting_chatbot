@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from lunardate import LunarDate
 
-PROMO_FILE = Path(__file__).resolve().parent / "promotions.csv"
+PROMO_FILE = Path(__file__).resolve().parents[1] / "data" / "promotions.csv"
 
 # Thứ tự cột đúng như lúc train (model.feature_name())
 FEATURE_COLUMNS = [

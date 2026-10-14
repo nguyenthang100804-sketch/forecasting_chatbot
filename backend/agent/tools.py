@@ -3,7 +3,10 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-from graph import run_forecast
+from agent.types import ForecastPayload
+from pipelines.forecast_graph import run_forecast
+
+
 def _normalize_date(value: str) -> str:
     for date_format in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
@@ -24,7 +27,8 @@ def predict_revenue(
     """Dự đoán doanh thu và COGS cho một ngày cụ thể.
 
     Chỉ gọi tool này khi người dùng thực sự yêu cầu dự đoán và đã cung cấp ngày.
-    discount_pct là phần trăm giảm giá; fixed_discount là mức giảm cố định bằng VND.
+    discount_pct là phần trăm giảm giá; fixed_discount là giá trị giảm cố định
+    theo đúng đơn vị của dữ liệu mô hình (ví dụ 50, không phải 50.000 VND).
     """
     normalized_date = _normalize_date(target_date)
     if discount_pct < 0 or fixed_discount < 0:
@@ -35,7 +39,7 @@ def predict_revenue(
         float(discount_pct),
         float(fixed_discount),
     )
-    result = {
+    result: ForecastPayload = {
         "target_date": normalized_date,
         "discount_pct": float(discount_pct),
         "fixed_discount": float(fixed_discount),

@@ -1,10 +1,12 @@
 import os
 import pandas as pd
 import numpy as np
-from nodes.state import ForecastState
+from pipelines.nodes.state import ForecastState
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STORE_PATH = os.path.join(BASE_DIR, "calendar_features.parquet")
+BACKEND_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+STORE_PATH = os.path.join(BACKEND_DIR, "data", "calendar_features.parquet")
 
 if os.path.exists(STORE_PATH):
     feature_store_df = pd.read_parquet(STORE_PATH)
