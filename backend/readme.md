@@ -111,6 +111,12 @@ streaming riêng hoặc tự nối chuỗi ở React. Nếu dùng `fetch` trực
 CopilotKit, client phải đọc response SSE và xử lý các event
 `TEXT_MESSAGE_START`, `TEXT_MESSAGE_CONTENT`, `TEXT_MESSAGE_END`.
 
+Gemini được cấu hình `max_retries=1` và timeout 60 giây. Node gọi model cũng
+không retry lại khi thất bại, tránh nhân số request khi API trả lỗi quota 429.
+Context gửi cho Gemini được rút gọn: tool result chỉ chứa các chỉ số và yếu tố
+chính cần để viết câu trả lời; payload SHAP đầy đủ và marker dành cho biểu đồ
+được giữ cho frontend nhưng không gửi lại vào prompt của các lượt sau.
+
 Endpoint kiểm tra:
 
 ```text
@@ -133,7 +139,7 @@ Agent dùng `ChatGoogleGenerativeAI` và bind tool:
 
 ```python
 model = ChatGoogleGenerativeAI(
-    model="gemini-3.6-flash",
+    model="gemini-3.8-flash",
     temperature=0.2,
 )
 agent = model.bind_tools(TOOLS)

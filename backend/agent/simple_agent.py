@@ -25,7 +25,7 @@ Bạn là trợ lý dự báo doanh thu bằng tiếng Việt.
 """
 
 simple_agent = create_agent(
-    model=ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.2),
+    model=ChatGoogleGenerativeAI(model="gemini-3.8-flash", temperature=0.2),
     tools=TOOLS,
     system_prompt=SYSTEM_PROMPT,
     checkpointer=InMemorySaver(),

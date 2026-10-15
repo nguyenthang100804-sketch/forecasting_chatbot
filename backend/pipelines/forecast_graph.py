@@ -38,25 +38,3 @@ def run_forecast(
         }
     )
     return state["forecast_results"]
-
-# def export_graph_image(output_dir: Path | None = None) -> None:
-#     """Vẽ forecast_graph và lưu ảnh PNG + mã Mermaid vào output_dir."""
-#     output_dir = output_dir or Path.cwd()          # thư mục đang đứng khi chạy lệnh
-#     drawable = forecast_graph.get_graph()
-
-#     # 1. Mã Mermaid dạng text: không cần mạng, luôn thành công
-#     mmd_path = output_dir / "forecast_graph.mmd"
-#     mmd_path.write_text(drawable.draw_mermaid(), encoding="utf-8")
-#     print(f"Đã lưu mã Mermaid: {mmd_path}")
-
-#     # 2. Ảnh PNG: mặc định gọi dịch vụ mermaid.ink nên cần internet
-#     try:
-#         png_path = output_dir / "forecast_graph.png"
-#         png_path.write_bytes(drawable.draw_mermaid_png())
-#         print(f"Đã lưu ảnh: {png_path}")
-#     except Exception as exc:
-#         print(f"Không vẽ được PNG (kiểm tra mạng): {exc}")
-
-
-# if __name__ == "__main__":
-#     export_graph_image()

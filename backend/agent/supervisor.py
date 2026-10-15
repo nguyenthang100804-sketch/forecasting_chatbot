@@ -14,11 +14,14 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.types import RetryPolicy
 
 from agent.tools import TOOLS
 from agent.formatting import (
     format_forecast_history,
+    format_tool_result_for_model,
     forecast_marker,
+    strip_forecast_marker,
 )
 from agent.types import ForecastPayload
 from agent.save_forecast import process as save_forecast
@@ -31,19 +34,19 @@ EXPLANATION_WORDS = ("giải thích", "tại sao", "vì sao", "chi tiết", "ph�
 PREDICTION_WORDS = ("dự đoán", "dự báo", "doanh thu", "forecast", "predict")
 
 SYSTEM_PROMPT = """
-Bạn là trợ lý Forecast Chatbot bằng tiếng Việt.
-
-Quy tắc:
-- Trả lời các câu hỏi thông thường một cách tự nhiên, không gọi tool dự báo.
-- Chỉ gọi tool predict_revenue khi người dùng thực sự yêu cầu dự đoán doanh thu/COGS.
-- Nếu người dùng yêu cầu dự đoán nhưng chưa có ngày cụ thể, hãy hỏi lại ngày và không gọi tool.
-- target_date khi gọi tool phải ở dạng YYYY-MM-DD. discount_pct là phần trăm.
-- fixed_discount dùng đúng đơn vị của dữ liệu mô hình (ví dụ 50), không quy đổi sang VND.
-- Nếu người dùng yêu cầu giải thích kết quả mà chưa có kết quả dự báo tương ứng trong lịch sử, hãy nói rõ chưa có dữ liệu và hỏi họ muốn dự đoán ngày nào.
-- Nếu kết quả cho ngày được hỏi đã có trong lịch sử, hãy dùng đúng kết quả đó và tuyệt đối không gọi lại tool.
-- Nếu cùng một ngày có nhiều kịch bản giảm giá, hãy chọn kịch bản có mức giảm khớp với câu hỏi; nếu không xác định được, hãy hỏi lại.
-- Không bịa số liệu. Khi trả kết quả dự báo, luôn nêu cả doanh thu và COGS.
+Bạn là trợ lý dự báo doanh thu bằng tiếng Việt.
+- Câu hỏi thông thường: trả lời tự nhiên, không gọi tool.
+- Chỉ gọi predict_revenue khi người dùng yêu cầu dự báo doanh thu/COGS và có ngày cụ thể.
+- Nếu thiếu ngày, hỏi lại và không gọi tool.
+- target_date phải là YYYY-MM-DD; discount_pct là phần trăm.
+- fixed_discount dùng đơn vị mô hình (ví dụ 50), không đổi sang VND.
+- Giải thích khi chưa có kết quả phù hợp: nói rõ chưa có dữ liệu và hỏi ngày cần dự báo.
+- Nếu đã có kết quả phù hợp trong lịch sử, dùng kết quả đó và không gọi lại tool.
+- Nếu một ngày có nhiều mức giảm, chọn mức khớp câu hỏi; nếu không rõ, hỏi lại.
+- Không bịa số liệu; câu trả lời dự báo luôn nêu doanh thu và COGS.
 """
+
+_MODEL: ChatGoogleGenerativeAI | None = None
 
 
 def _message_text(message: BaseMessage) -> str:
@@ -140,6 +143,35 @@ def _is_forecast_related(text: str) -> bool:
     return any(word in text for word in EXPLANATION_WORDS + PREDICTION_WORDS)
 
 
+def _get_model() -> ChatGoogleGenerativeAI:
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = ChatGoogleGenerativeAI(
+            model="gemini-3.8-flash",
+            temperature=0.2,
+            max_retries=1,
+            request_timeout=60,
+        )
+    return _MODEL
+
+
+def _messages_for_model(messages: Iterable[BaseMessage]) -> list[BaseMessage]:
+    """Remove frontend-only payloads and verbose tool JSON before an LLM call."""
+    compact_messages: list[BaseMessage] = []
+    for message in messages:
+        content = _message_text(message)
+        if getattr(message, "type", None) == "tool":
+            compact_content = format_tool_result_for_model(content)
+        else:
+            compact_content = strip_forecast_marker(content)
+
+        if compact_content != content:
+            compact_messages.append(message.model_copy(update={"content": compact_content}))
+        else:
+            compact_messages.append(message)
+    return compact_messages
+
+
 def _stream_model_response(model_runner, messages: list[BaseMessage]) -> AIMessage:
     """Stream model chunks while preserving the final tool-call message."""
     response_chunk: AIMessageChunk | None = None
@@ -170,7 +202,7 @@ def agent_process(state: ForecastState):
             "Hãy cấu hình biến này trong backend/.env hoặc environment."
         )
 
-    model = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.2)
+    model = _get_model()
     history = state.get("forecast_history", {})
     user_text = _last_user_text(state.get("messages", []))
     has_explanation_context = bool(history) and any(
@@ -185,7 +217,7 @@ def agent_process(state: ForecastState):
                 + format_forecast_history(history)
             )
         ]
-        + state.get("messages", []),
+        + _messages_for_model(state.get("messages", [])),
     )
     if not isinstance(response, AIMessage):
         raise TypeError("Agent phải trả về AIMessage.")
@@ -207,7 +239,11 @@ def route_agent(state: ForecastState):
 
 
 builder = StateGraph(ForecastState)
-builder.add_node("agent_node", agent_process)
+builder.add_node(
+    "agent_node",
+    agent_process,
+    retry_policy=RetryPolicy(max_attempts=1),
+)
 builder.add_node("tool_node", ToolNode(TOOLS))
 builder.add_node("save_forecast_node", save_forecast)
 builder.set_entry_point("agent_node")

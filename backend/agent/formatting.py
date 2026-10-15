@@ -1,6 +1,9 @@
 import json
+import re
 
 from agent.types import ForecastPayload
+
+FORECAST_MARKER_PATTERN = re.compile(r"\s*<!--FORECAST_DATA:.*?-->", re.DOTALL)
 
 
 def _format_money(value: object) -> str:
@@ -35,6 +38,22 @@ def format_forecast_context(forecast: ForecastPayload) -> str:
             f"Yếu tố làm giảm COGS: {_format_factors(cogs['top_barriers'])}.",
         ]
     )
+
+
+def format_tool_result_for_model(content: object) -> str:
+    """Keep only the forecast facts needed for the final natural-language reply."""
+    try:
+        payload = json.loads(content) if isinstance(content, str) else content
+        if not isinstance(payload, dict) or "forecast_results" not in payload:
+            return str(content)
+        return format_forecast_context(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return str(content)
+
+
+def strip_forecast_marker(content: str) -> str:
+    """Hide the frontend-only chart payload from later model requests."""
+    return FORECAST_MARKER_PATTERN.sub("", content).strip()
 
 
 def format_forecast_history(history: dict[str, list[ForecastPayload]]) -> str:
