@@ -17,6 +17,28 @@ const getMessageContent = (message) => {
 const removeForecastMarker = (content) =>
   content.replace(FORECAST_DATA_PATTERN, '').trim();
 
+const createActivity = (content) => {
+  const isExplanation = /tại sao|giải thích|chi tiết|vì sao|phân tích/i.test(content);
+
+  return {
+    active: true,
+    steps: isExplanation
+      ? [
+          'Đang phân tích yêu cầu giải thích.',
+          'Đang chuẩn bị dữ liệu dự báo gần nhất.',
+          'Đang tính toán các yếu tố ảnh hưởng bằng SHAP.',
+          'Đang tổng hợp phần giải thích kết quả.',
+        ]
+      : [
+          'Đang phân tích yêu cầu dự báo.',
+          'Đang chuẩn bị dữ liệu và đặc trưng thời gian.',
+          'Đang chạy mô hình dự báo doanh thu và chi phí.',
+          'Đang tổng hợp kết quả dự báo.',
+        ],
+    currentIndex: 0,
+  };
+};
+
 export const useChat = () => {
   const {
     messages: copilotMessages,
@@ -25,6 +47,7 @@ export const useChat = () => {
   } = useCopilotChatInternal();
   const messagesEndRef = useRef(null);
   const [error, setError] = useState('');
+  const [activity, setActivity] = useState(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -39,6 +62,7 @@ export const useChat = () => {
     if (!content) return;
 
     setError('');
+    setActivity(createActivity(content));
 
     try {
       await sendCopilotMessage({
@@ -46,12 +70,45 @@ export const useChat = () => {
         role: 'user',
         content,
       });
+      setActivity((currentActivity) =>
+        currentActivity
+          ? {
+              ...currentActivity,
+              active: false,
+              currentIndex: currentActivity.steps.length - 1,
+              completed: true,
+            }
+          : currentActivity,
+      );
     } catch (sendError) {
       console.error('Không thể gửi tin nhắn tới Forecast Agent:', sendError);
       setError('Không thể kết nối tới Forecast Agent. Vui lòng kiểm tra backend và thử lại.');
+      setActivity((currentActivity) =>
+        currentActivity ? { ...currentActivity, active: false, failed: true } : currentActivity,
+      );
       throw sendError;
     }
   };
+
+  useEffect(() => {
+    if (!activity?.active) return undefined;
+
+    const timer = window.setInterval(() => {
+      setActivity((currentActivity) => {
+        if (!currentActivity?.active) return currentActivity;
+
+        return {
+          ...currentActivity,
+          currentIndex: Math.min(
+            currentActivity.currentIndex + 1,
+            currentActivity.steps.length - 1,
+          ),
+        };
+      });
+    }, 1800);
+
+    return () => window.clearInterval(timer);
+  }, [activity?.active]);
 
   // Ánh xạ tin nhắn của CopilotKit về format UI cũ
   const safeMessages = Array.isArray(copilotMessages) ? copilotMessages : [];
@@ -131,6 +188,7 @@ export const useChat = () => {
   return {
     messages: mappedMessages,
     isLoading: !!isLoading,
+    activity,
     error,
     sendMessage,
     messagesEndRef,

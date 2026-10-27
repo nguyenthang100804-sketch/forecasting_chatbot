@@ -4,7 +4,7 @@ from datetime import datetime
 from langchain_core.tools import tool
 
 from agent.types import ForecastPayload
-from pipelines.forecast_graph import run_forecast
+from pipelines.forecast_graph import run_forecast, run_explanation
 
 
 def _normalize_date(value: str) -> str:
@@ -48,4 +48,35 @@ def predict_revenue(
     return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
-TOOLS = [predict_revenue]
+@tool
+def explain_forecast(
+    target_date: str,
+    discount_pct: float = 0.0,
+    fixed_discount: float = 0.0,
+) -> str:
+    """Tính SHAP để giải thích một kết quả dự báo đã có.
+
+    Chỉ gọi khi người dùng yêu cầu giải thích/phân tích và đã có kết quả dự báo
+    tương ứng trong lịch sử. Tool này trả prediction cùng dữ liệu SHAP chi tiết.
+    """
+    normalized_date = _normalize_date(target_date)
+    if discount_pct < 0 or fixed_discount < 0:
+        raise ValueError("Mức giảm giá không được âm.")
+
+    forecast_results = run_explanation(
+        normalized_date,
+        float(discount_pct),
+        float(fixed_discount),
+    )
+    result: ForecastPayload = {
+        "target_date": normalized_date,
+        "discount_pct": float(discount_pct),
+        "fixed_discount": float(fixed_discount),
+        "forecast_results": forecast_results,
+    }
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
+PREDICTION_TOOLS = [predict_revenue]
+EXPLANATION_TOOLS = [explain_forecast]
+TOOLS = PREDICTION_TOOLS + EXPLANATION_TOOLS

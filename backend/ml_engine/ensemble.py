@@ -7,7 +7,7 @@ import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from ml_engine.features_shape_13_19 import build_features as build_shape_features
-from ml_engine.final_model_shap import explain_final
+from ml_engine.final_model_shap import explain_final, predict_final
 from pipelines.nodes.feature_node import DISCOUNT_TYPE_CATS, PROMO_SEASON_CATS
 
 MODEL_DIR = os.path.join(BASE_DIR, "data", "models")
@@ -64,7 +64,26 @@ def _top_factors(contributions):
 
 
 @lru_cache(maxsize=100)
-def _cached_ensemble(features_json, target_date, discount_pct, fixed_discount):
+def _cached_predictions(features_json, target_date, discount_pct, fixed_discount):
+    features = json.loads(features_json)
+    two_period = _two_period_frame(features)
+    shape = _shape_frame(target_date, discount_pct, fixed_discount)
+    output = {}
+
+    for target, model_set in MODELS.items():
+        output[target] = {
+            "prediction": predict_final(
+                *model_set,
+                two_period,
+                target_date,
+                "Revenue" if target == "revenue" else "COGS",
+                x_shape=shape,
+            )
+        }
+    return output
+
+
+def _cached_explanations(features_json, target_date, discount_pct, fixed_discount):
     features = json.loads(features_json)
     two_period = _two_period_frame(features)
     shape = _shape_frame(target_date, discount_pct, fixed_discount)
@@ -87,13 +106,27 @@ def _cached_ensemble(features_json, target_date, discount_pct, fixed_discount):
     return output
 
 
-def run_ensemble(features, target_date, discount_pct=0.0, fixed_discount=0.0):
-    """Chạy ensemble 0.5 Two-Period + 0.5 Shape và SHAP nhóm của handoff."""
+def _features_cache_key(features):
     serializable = {
         key: (None if pd.isna(value) else value) for key, value in features.items()
     }
-    return _cached_ensemble(
-        json.dumps(serializable, sort_keys=True, default=str),
+    return json.dumps(serializable, sort_keys=True, default=str)
+
+
+def run_predictions(features, target_date, discount_pct=0.0, fixed_discount=0.0):
+    """Chạy ensemble và chỉ trả prediction cho Revenue/COGS."""
+    return _cached_predictions(
+        _features_cache_key(features),
+        target_date,
+        float(discount_pct),
+        float(fixed_discount),
+    )
+
+
+def run_explanations(features, target_date, discount_pct=0.0, fixed_discount=0.0):
+    """Chạy ensemble kèm SHAP, chỉ dùng cho yêu cầu giải thích."""
+    return _cached_explanations(
+        _features_cache_key(features),
         target_date,
         float(discount_pct),
         float(fixed_discount),

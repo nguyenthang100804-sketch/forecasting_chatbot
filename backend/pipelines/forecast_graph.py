@@ -1,7 +1,7 @@
 """Deterministic forecast graph.
 
 This module owns only the prediction workflow. The conversational supervisor
-and its tools live in ``supervisor.py`` and ``agent_tools.py``.
+and its tools live in ``agent/supervisor.py`` and ``agent/tools.py``.
 """
 
 from datetime import datetime
@@ -12,6 +12,7 @@ from langgraph.graph import END, StateGraph
 from pipelines.nodes.feature_node import process as build_features
 from pipelines.nodes.ml_node import process as run_ml
 from pipelines.nodes.state import ForecastState
+from ml_engine.ensemble import run_explanations
 
 
 builder = StateGraph(ForecastState)
@@ -38,3 +39,24 @@ def run_forecast(
         }
     )
     return state["forecast_results"]
+
+
+def run_explanation(
+    target_date: datetime,
+    discount_pct: float = 0.0,
+    fixed_discount: float = 0.0,
+) -> dict:
+    """Build features and calculate SHAP for an existing forecast request."""
+    feature_state = build_features(
+        {
+            "target_date": target_date,
+            "discount_pct": float(discount_pct),
+            "fixed_discount": float(fixed_discount),
+        }
+    )
+    return run_explanations(
+        feature_state["ml_features"],
+        target_date,
+        float(discount_pct),
+        float(fixed_discount),
+    )

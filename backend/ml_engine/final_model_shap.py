@@ -115,6 +115,20 @@ def to_python(value):
 # ---------------------------------------------------------------------------
 # Hàm chính
 # ---------------------------------------------------------------------------
+def predict_final(p1, p2, m2, x_two_period, date, target, x_shape=None):
+    """Dự báo mô hình cuối mà không tính SHAP."""
+    if x_shape is None:
+        x_shape = build_features(date)
+
+    log_p1 = float(p1.predict(x_two_period[p1.feature_name()])[0])
+    log_p2 = float(p2.predict(x_two_period[p2.feature_name()])[0])
+    log_m2 = float(m2.predict(x_shape[m2.feature_name()])[0])
+
+    two_period = A_P1 * np.expm1(log_p1) + (1 - A_P1) * np.expm1(log_p2)
+    shape = K[target] * np.expm1(log_m2)
+    return float(W * two_period + (1 - W) * shape)
+
+
 def explain_final(p1, p2, m2, x_two_period, date, target, x_shape=None):
     """Dự báo và SHAP của mô hình cuối cho một ngày.
 

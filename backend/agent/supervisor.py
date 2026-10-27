@@ -16,7 +16,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import RetryPolicy
 
-from agent.tools import TOOLS
+from agent.tools import EXPLANATION_TOOLS, PREDICTION_TOOLS, TOOLS
 from agent.formatting import (
     format_forecast_history,
     format_tool_result_for_model,
@@ -41,7 +41,8 @@ Bạn là trợ lý dự báo doanh thu bằng tiếng Việt.
 - target_date phải là YYYY-MM-DD; discount_pct là phần trăm.
 - fixed_discount dùng đơn vị mô hình (ví dụ 50), không đổi sang VND.
 - Giải thích khi chưa có kết quả phù hợp: nói rõ chưa có dữ liệu và hỏi ngày cần dự báo.
-- Nếu đã có kết quả phù hợp trong lịch sử, dùng kết quả đó và không gọi lại tool.
+- Nếu đã có kết quả phù hợp trong lịch sử, không gọi lại predict_revenue.
+- Chỉ gọi explain_forecast khi người dùng yêu cầu giải thích/phân tích; tool này mới tính SHAP.
 - Nếu một ngày có nhiều mức giảm, chọn mức khớp câu hỏi; nếu không rõ, hỏi lại.
 - Không bịa số liệu; câu trả lời dự báo luôn nêu doanh thu và COGS.
 """
@@ -208,7 +209,8 @@ def agent_process(state: ForecastState):
     has_explanation_context = bool(history) and any(
         word in user_text for word in EXPLANATION_WORDS
     )
-    model_runner = model if has_explanation_context else model.bind_tools(TOOLS)
+    tool_set = EXPLANATION_TOOLS if has_explanation_context else PREDICTION_TOOLS
+    model_runner = model.bind_tools(tool_set)
     response = _stream_model_response(
         model_runner,
         [

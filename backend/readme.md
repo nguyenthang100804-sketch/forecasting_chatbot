@@ -45,9 +45,9 @@ Supervisor là điểm vào của AG-UI. Agent tự quyết định:
 | Loại message | Hành động |
 |---|---|
 | Câu hỏi thông thường | Trả lời trực tiếp, không chạy ML |
-| Yêu cầu dự báo có ngày | Gọi `predict_revenue` |
+| Yêu cầu dự báo có ngày | Gọi `predict_revenue` (không tính SHAP) |
 | Yêu cầu dự báo thiếu ngày | Hỏi lại ngày, không gọi tool |
-| Giải thích sau dự báo | Đọc `last_forecast`, không gọi lại tool |
+| Giải thích sau dự báo | Gọi `explain_forecast` để tính SHAP |
 | Dự đoán ngày khác | Gọi lại `predict_revenue` với ngày mới |
 
 ## 2. Cấu trúc file
@@ -57,7 +57,7 @@ backend/
 ├── main.py                    # FastAPI và AG-UI endpoint
 ├── agent/                     # Hội thoại, tool và state formatting
 │   ├── supervisor.py          # Agent giám sát và vòng tool-call
-│   ├── tools.py               # Tool predict_revenue
+│   ├── tools.py               # Tool predict_revenue và explain_forecast
 │   ├── formatting.py          # Định dạng lịch sử/kết quả forecast
 │   ├── save_forecast.py       # Lưu tool result vào state
 │   └── types.py               # Kiểu dữ liệu forecast
@@ -206,11 +206,11 @@ Ví dụ:
 Giải thích kết quả dự đoán vừa rồi
 ```
 
-Nếu state có `last_forecast`, agent giải thích từ dữ liệu đó và không gọi
-`predict_revenue` lần nữa. Nếu chưa có dự báo, agent thông báo chưa có kết quả
-để giải thích và hỏi người dùng muốn dự đoán ngày nào.
+Nếu state có `last_forecast`, agent gọi `explain_forecast` để tính SHAP cho đúng
+kịch bản và dùng dữ liệu đó để giải thích. Nếu chưa có dự báo, agent thông báo
+chưa có kết quả để giải thích và hỏi người dùng muốn dự đoán ngày nào.
 
-## 5. Tool `predict_revenue`
+## 5. Các tool dự báo và giải thích
 
 File: [agent/tools.py](./agent/tools.py)
 
@@ -229,15 +229,13 @@ Tool thực hiện:
 ```text
 Chuẩn hóa ngày
     ↓
-graph.run_forecast() -> Forecast Graph (feature -> ML)
+pipelines.forecast_graph.run_forecast() -> Forecast Graph (feature -> ML)
     ↓
-ml_node.process() -> ensemble_engine
+ml_node.process() -> ml_engine.ensemble
     ↓
 Two-Period 0.5 + Shape 13-19 0.5
     ↓
-SHAP theo 8 nhóm feature
-    ↓
-Trả structured JSON
+Trả prediction của Revenue và COGS
 ```
 
 `ml_engine/ensemble.py` nạp một lần bốn model Two-Period của project và hai model
@@ -251,6 +249,10 @@ TwoPeriod = 0.45 * expm1(P1) + 0.55 * expm1(P2)
 Shape = 0.8 * expm1(M2)
 Final = 0.5 * TwoPeriod + 0.5 * Shape
 ```
+
+Tool `explain_forecast` chỉ được gọi khi người dùng yêu cầu giải thích/phân
+tích một kết quả đã có. Tool này chạy lại feature và tính SHAP đầy đủ cho
+Revenue và COGS để trả dữ liệu biểu đồ.
 
 SHAP được tính trong không gian log cho từng model, đổi tên feature tương ứng,
 gộp thành các nhóm `Seasonality`, `Lunar calendar`, `Tet`, `Edge-of-month`,
@@ -315,10 +317,10 @@ supervisor.py
     +-- yêu cầu dự báo ------> ToolNode
                                   |
                                   v
-                         agent_tools.predict_revenue
+                         agent.tools.predict_revenue
                                   |
                                   v
-                            graph.run_forecast
+                       pipelines.forecast_graph
                                   |
                                   v
                         feature_node -> ml_node

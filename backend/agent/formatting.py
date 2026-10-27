@@ -29,13 +29,13 @@ def format_forecast_context(forecast: ForecastPayload) -> str:
             f"Giảm giá theo phần trăm: {forecast['discount_pct']}%.",
             f"Giảm giá cố định (đơn vị mô hình): {forecast['fixed_discount']}.",
             f"Doanh thu dự kiến: {_format_money(revenue['prediction'])}.",
-            f"Mức nền doanh thu: {_format_money(revenue['base_value'])}.",
-            f"Yếu tố làm tăng doanh thu: {_format_factors(revenue['top_drivers'])}.",
-            f"Yếu tố làm giảm doanh thu: {_format_factors(revenue['top_barriers'])}.",
+            f"Mức nền doanh thu: {_format_money(revenue.get('base_value', revenue['prediction']))}.",
+            f"Yếu tố làm tăng doanh thu: {_format_factors(revenue.get('top_drivers', []))}.",
+            f"Yếu tố làm giảm doanh thu: {_format_factors(revenue.get('top_barriers', []))}.",
             f"COGS dự kiến: {_format_money(cogs['prediction'])}.",
-            f"Mức nền COGS: {_format_money(cogs['base_value'])}.",
-            f"Yếu tố làm tăng COGS: {_format_factors(cogs['top_drivers'])}.",
-            f"Yếu tố làm giảm COGS: {_format_factors(cogs['top_barriers'])}.",
+            f"Mức nền COGS: {_format_money(cogs.get('base_value', cogs['prediction']))}.",
+            f"Yếu tố làm tăng COGS: {_format_factors(cogs.get('top_drivers', []))}.",
+            f"Yếu tố làm giảm COGS: {_format_factors(cogs.get('top_barriers', []))}.",
         ]
     )
 

@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useChat } from '../hooks/useChat';
 import ChatMessage from '../components/ChatMessage';
-import { Send, Loader2, BarChart3 } from 'lucide-react';
+import ActivitySteps from '../components/ActivitySteps';
+import { Send, BarChart3 } from 'lucide-react';
 
 const AgentChatPage = () => {
-  const { messages, isLoading, error, sendMessage, messagesEndRef } = useChat();
+  const { messages, isLoading, activity, error, sendMessage, messagesEndRef } = useChat();
   const [inputText, setInputText] = useState('');
   const inputRef = React.useRef(null);
   const predictionPrompt = 'Hãy dự đoán doanh thu cho ngày ';
@@ -72,12 +73,7 @@ const AgentChatPage = () => {
             />
           ))}
           
-          {isLoading && (
-            <div className="flex gap-2 items-center text-gray-400 text-sm ml-12">
-              <Loader2 className="animate-spin w-4 h-4" /> 
-              <span>AI đang phân tích dữ liệu...</span>
-            </div>
-          )}
+          <ActivitySteps activity={activity} />
           <div ref={messagesEndRef} />
         </div>
 
