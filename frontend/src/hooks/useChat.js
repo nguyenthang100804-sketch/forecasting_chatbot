@@ -17,25 +17,74 @@ const getMessageContent = (message) => {
 const removeForecastMarker = (content) =>
   content.replace(FORECAST_DATA_PATTERN, '').trim();
 
+const PHASES = {
+  thinking: 'LLM đang phân tích yêu cầu và chọn hành động.',
+  tool_calling: 'LLM đang gọi tool xử lý dữ liệu.',
+  tool_running: 'Backend đang chạy tool dự báo/giải thích.',
+  composing: 'LLM đang tổng hợp câu trả lời cuối cùng.',
+};
+
+const getToolCalls = (message) => {
+  if (Array.isArray(message?.tool_calls)) return message.tool_calls;
+  if (Array.isArray(message?.toolCalls)) return message.toolCalls;
+  if (!Array.isArray(message?.content)) return [];
+
+  return message.content.filter((part) =>
+    part?.type === 'tool-call' || part?.type === 'tool_call',
+  );
+};
+
+const getToolName = (message) => {
+  const toolCall = getToolCalls(message)[0];
+  return toolCall?.name || toolCall?.function?.name || message?.name || '';
+};
+
+const getBackendPhase = (messages, isLoading) => {
+  const latestMessage = messages[messages.length - 1];
+  if (latestMessage?.role === 'tool' || latestMessage?.type === 'tool') {
+    const toolName = getToolName(latestMessage);
+    const workflow = toolName === 'explain_forecast'
+      ? 'feature_node → SHAP'
+      : 'feature_node → ml_node';
+    return {
+      id: 'tool_running',
+      label: `Backend đang chạy ${toolName || 'tool dự báo'} (${workflow}).`,
+    };
+  }
+  const toolName = getToolName(latestMessage);
+  if (getToolCalls(latestMessage).length > 0) {
+    return {
+      id: 'tool_calling',
+      label: `LLM đang gọi tool ${toolName || 'xử lý dữ liệu'}.`,
+    };
+  }
+  if (isLoading && latestMessage?.role === 'assistant') {
+    return { id: 'composing', label: PHASES.composing };
+  }
+  return { id: 'thinking', label: PHASES.thinking };
+};
+
 const createActivity = (content) => {
   const isExplanation = /tại sao|giải thích|chi tiết|vì sao|phân tích/i.test(content);
+  const startedAt = Date.now();
 
   return {
     active: true,
-    steps: isExplanation
-      ? [
-          'Đang phân tích yêu cầu giải thích.',
-          'Đang chuẩn bị dữ liệu dự báo gần nhất.',
-          'Đang tính toán các yếu tố ảnh hưởng bằng SHAP.',
-          'Đang tổng hợp phần giải thích kết quả.',
-        ]
-      : [
-          'Đang phân tích yêu cầu dự báo.',
-          'Đang chuẩn bị dữ liệu và đặc trưng thời gian.',
-          'Đang chạy mô hình dự báo doanh thu và chi phí.',
-          'Đang tổng hợp kết quả dự báo.',
-        ],
-    currentIndex: 0,
+    startedAt,
+    elapsedMs: 0,
+    isExplanation,
+    currentPhase: {
+      id: 'thinking',
+      label: PHASES.thinking,
+      startedAt,
+    },
+    steps: [{
+      id: 'thinking',
+      label: PHASES.thinking,
+      status: 'running',
+      startedAt,
+      durationMs: 0,
+    }],
   };
 };
 
@@ -75,23 +124,50 @@ export const useChat = () => {
           ? {
               ...currentActivity,
               active: false,
-              currentIndex: currentActivity.steps.length - 1,
+              elapsedMs: Date.now() - currentActivity.startedAt,
               completed: true,
+              steps: currentActivity.steps.map((step, index) => ({
+                ...step,
+                status: 'completed',
+                durationMs: index === currentActivity.steps.length - 1
+                  ? Date.now() - step.startedAt
+                  : step.durationMs,
+                endedAt: index === currentActivity.steps.length - 1
+                  ? Date.now()
+                  : step.endedAt,
+              })),
             }
           : currentActivity,
       );
     } catch (sendError) {
       console.error('Không thể gửi tin nhắn tới Forecast Agent:', sendError);
       setError('Không thể kết nối tới Forecast Agent. Vui lòng kiểm tra backend và thử lại.');
-      setActivity((currentActivity) =>
-        currentActivity ? { ...currentActivity, active: false, failed: true } : currentActivity,
-      );
+      setActivity((currentActivity) => {
+        if (!currentActivity) return currentActivity;
+        const now = Date.now();
+        return {
+          ...currentActivity,
+          active: false,
+          failed: true,
+          elapsedMs: now - currentActivity.startedAt,
+          steps: currentActivity.steps.map((step, index) =>
+            index === currentActivity.steps.length - 1
+              ? {
+                  ...step,
+                  status: 'failed',
+                  endedAt: now,
+                  durationMs: now - step.startedAt,
+                }
+              : step,
+          ),
+        };
+      });
       throw sendError;
     }
   };
 
   useEffect(() => {
-    if (!activity?.active) return undefined;
+    if (!activity?.active || !isLoading) return undefined;
 
     const timer = window.setInterval(() => {
       setActivity((currentActivity) => {
@@ -99,16 +175,64 @@ export const useChat = () => {
 
         return {
           ...currentActivity,
-          currentIndex: Math.min(
-            currentActivity.currentIndex + 1,
-            currentActivity.steps.length - 1,
+          elapsedMs: Date.now() - currentActivity.startedAt,
+          steps: currentActivity.steps.map((step, index) =>
+            index === currentActivity.steps.length - 1 && step.status === 'running'
+              ? { ...step, durationMs: Date.now() - step.startedAt }
+              : step,
           ),
         };
       });
-    }, 1800);
+    }, 250);
 
     return () => window.clearInterval(timer);
-  }, [activity?.active]);
+  }, [activity?.active, isLoading]);
+
+  useEffect(() => {
+    if (!activity?.active || !isLoading) return;
+
+    const nextPhase = getBackendPhase(
+      Array.isArray(copilotMessages) ? copilotMessages : [],
+      isLoading,
+    );
+    if (nextPhase.id === activity.currentPhase.id) return;
+
+    const now = Date.now();
+    setActivity((currentActivity) => {
+      if (!currentActivity?.active || currentActivity.currentPhase.id === nextPhase.id) {
+        return currentActivity;
+      }
+
+      const steps = currentActivity.steps.map((step, index) =>
+        index === currentActivity.steps.length - 1
+          ? {
+              ...step,
+              status: 'completed',
+              endedAt: now,
+              durationMs: now - step.startedAt,
+            }
+          : step,
+      );
+      return {
+        ...currentActivity,
+        currentPhase: {
+          id: nextPhase.id,
+          label: nextPhase.label,
+          startedAt: now,
+        },
+        steps: [
+          ...steps,
+          {
+            id: `${nextPhase.id}-${now}`,
+            label: nextPhase.label,
+            status: 'running',
+            startedAt: now,
+            durationMs: 0,
+          },
+        ],
+      };
+    });
+  }, [activity?.active, activity?.currentPhase?.id, copilotMessages, isLoading]);
 
   // Ánh xạ tin nhắn của CopilotKit về format UI cũ
   const safeMessages = Array.isArray(copilotMessages) ? copilotMessages : [];

@@ -148,7 +148,7 @@ def _get_model() -> ChatGoogleGenerativeAI:
     global _MODEL
     if _MODEL is None:
         _MODEL = ChatGoogleGenerativeAI(
-            model="gemini-3.8-flash",
+            model="gemini-3.6-flash",
             temperature=0.2,
             max_retries=1,
             request_timeout=60,
